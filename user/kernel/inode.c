@@ -485,18 +485,16 @@ int tux3_save_inode(struct inode *inode, struct tux3_iattr_data *idata,
 	return save_inode(inode, idata, delta);
 }
 
-#ifdef __KERNEL__
-/* Truncate partial block. If partial, we have to update last block. */
-static int tux3_truncate_partial_block(struct inode *inode, loff_t newsize)
-{
-	return tux3_truncate_page(inode->i_mapping, newsize, tux3_get_block);
-}
-#endif /* !__KERNEL__ */
-
 /* FIXME: we wait page under I/O though, we would like to fork it instead */
 static int tux3_truncate(struct inode *inode, loff_t newsize)
 {
 	/* FIXME: expanding size is not tested */
+#ifdef __KERNEL__
+	const unsigned boundary = PAGE_CACHE_SIZE;
+#else
+	const unsigned boundary = tux_sb(inode->i_sb)->blocksize;
+#endif
+	loff_t oldsize, holebegin;
 	int is_expand, err;
 
 	if (newsize == inode->i_size)
@@ -505,21 +503,49 @@ static int tux3_truncate(struct inode *inode, loff_t newsize)
 	/* inode_dio_wait(inode); */	/* FIXME: for direct I/O */
 
 	err = 0;
-	is_expand = newsize > inode->i_size;
+	oldsize = inode->i_size;
+	is_expand = newsize > oldsize;
 
 	if (!is_expand) {
 		err = tux3_truncate_partial_block(inode, newsize);
 		if (err)
 			goto error;
 	}
+#if 0
+{
+	const pgoff_t index = newsize >> PAGE_CACHE_SHIFT;
+	unsigned partial = newsize & (PAGE_CACHE_SIZE - 1);
+	if (partial) {
+		struct page *page = find_lock_page(inode->i_mapping, index);
+		if (page) {
+//			wait_on_page_writeback(page);
+			void *kaddr = kmap_atomic(page);
+			printk("%s: page %p, index %lu, partial %u, %Lu => %Lu, %lx\n",
+			       __func__,
+			       page, index, partial, oldsize, newsize,
+			       *(unsigned long *)(kaddr + partial));
+			kunmap_atomic(kaddr);
+			zero_user_segment(page, partial, PAGE_CACHE_SIZE);
+//			cleancache_invalidate_page(page->mapping, page);
+			if (page_has_private(page))
+				do_invalidatepage(page, partial);
+			unlock_page(page);
+			page_cache_release(page);
+		}
+	}
+}
+#endif
 
+	/* Change i_size, then clean buffers */
+	i_size_write(inode, newsize);
+	/* Roundup. Partial page is handled by tux3_truncate_partial_block() */
+	holebegin = round_up(newsize, boundary);
 #ifdef __KERNEL__
 	/* FIXME: The buffer fork before invalidate. We should merge to
-	 * truncate_setsize() */
-	tux3_truncate_inode_pages_range(inode->i_mapping, newsize, LLONG_MAX);
+	 * truncate_pagecache() */
+	tux3_truncate_inode_pages_range(inode->i_mapping, holebegin, LLONG_MAX);
 #endif
-	/* Change i_size, then clean buffers */
-	truncate_setsize(inode, newsize);
+	truncate_pagecache(inode, oldsize, holebegin);
 
 	if (!is_expand) {
 		err = tux3_add_truncate_hole(inode, newsize);

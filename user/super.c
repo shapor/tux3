@@ -126,6 +126,8 @@ int make_tux3(struct sb *sb)
 	if (err)
 		return err;
 
+	change_begin_atomic(sb);
+
 	trace("create bitmap");
 	sb->bitmap = create_internal_inode(sb, TUX_BITMAP_INO, NULL);
 	if (IS_ERR(sb->bitmap)) {
@@ -158,6 +160,8 @@ int make_tux3(struct sb *sb)
 		goto eek;
 	}
 
+	change_end_atomic(sb);
+
 	if ((err = sync_super(sb)))
 		goto eek;
 
@@ -166,6 +170,7 @@ int make_tux3(struct sb *sb)
 	show_buffers(sb->volmap->map);
 	return 0;
 eek:
+	change_end_atomic(sb);
 	if (err)
 		warn("eek, %s", strerror(-err));
 	iput(sb->bitmap);

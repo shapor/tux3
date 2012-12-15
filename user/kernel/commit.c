@@ -27,7 +27,6 @@ static void init_sb(struct sb *sb)
 	init_rwsem(&sb->delta_lock);
 	mutex_init(&sb->loglock);
 	INIT_LIST_HEAD(&sb->alloc_inodes);
-	spin_lock_init(&sb->orphan_add_lock);
 	INIT_LIST_HEAD(&sb->orphan_add);
 	spin_lock_init(&sb->orphan_del_lock);
 	INIT_LIST_HEAD(&sb->orphan_del);

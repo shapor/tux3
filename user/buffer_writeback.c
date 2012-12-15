@@ -195,7 +195,8 @@ static int buffer_index_cmp(void *priv, struct list_head *a,
 /*
  * Flush buffers in head
  */
-int flush_list(map_t *map, struct list_head *head)
+int flush_list(map_t *map, struct tux3_iattr_data *idata,
+	       struct list_head *head)
 {
 	struct bufvec bufvec;
 	int err = 0;
@@ -223,9 +224,4 @@ int flush_list(map_t *map, struct list_head *head)
 	bufvec_free(&bufvec);
 
 	return err;
-}
-
-int flush_buffers(map_t *map)
-{
-	return flush_list(map, tux3_dirty_buffers(map->inode, BUFFER_INIT_DELTA));
 }

@@ -717,6 +717,19 @@ void change_end_atomic(struct sb *sb)
 	delta_put(sb, delta_ref);
 }
 
+void change_begin_atomic_nested(struct sb *sb, void **ptr)
+{
+	*ptr = current->journal_info;
+	current->journal_info = NULL;
+	change_begin_atomic(sb);
+}
+
+void change_end_atomic_nested(struct sb *sb, void *ptr)
+{
+	change_end_atomic(sb);
+	current->journal_info = ptr;
+}
+
 static int need_delta(struct sb *sb)
 {
 	static unsigned crudehack;

@@ -88,6 +88,8 @@ static inline void cleanup_dirty_for_umount(struct sb *sb)
 
 static void __tux3_put_super(struct sb *sbi)
 {
+	tux3_exit_flusher(sbi);
+
 	/* All forked buffers should be freed here */
 	free_forked_buffers(sbi, 1);
 

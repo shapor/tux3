@@ -9,6 +9,7 @@
 #define trace trace_on
 #endif
 
+static void tux3_init_flusher(struct sb *sb);
 static void __delta_transition(struct sb *sb, struct delta_ref *delta_ref);
 
 /*
@@ -33,6 +34,7 @@ static void init_sb(struct sb *sb)
 	init_rwsem(&sb->delta_lock);
 #endif
 	init_waitqueue_head(&sb->delta_event_wq);
+	tux3_init_flusher(sb);
 	mutex_init(&sb->loglock);
 	INIT_LIST_HEAD(&sb->orphan_add);
 	INIT_LIST_HEAD(&sb->orphan_del);
@@ -436,37 +438,92 @@ static int do_commit(struct sb *sb, enum rollup_flags rollup_flag)
 	return err; /* FIXME: error handling */
 }
 
-/* FIXME: This should be daemonize */
+/*
+ * Flush worker
+ */
+
+static int __flush_pending_delta(struct sb *sb)
+{
+	unsigned delta = sb->marshal_delta;
+	int err;
+#ifndef ROLLUP_DEBUG
+	enum rollup_flags rollup_flag = ALLOW_ROLLUP;
+#else
+	struct delta_ref *delta_ref = sb->pending_delta;
+	enum rollup_flags rollup_flag = delta_ref->rollup_flag;
+	sb->pending_delta = NULL;
+#endif
+
+	err = do_commit(sb, rollup_flag);
+
+	sb->committed_delta = delta;
+	clear_bit(TUX3_COMMIT_RUNNING_BIT, &sb->backend_state);
+
+	/* Wake up waiters for delta commit */
+	wake_up_all(&sb->delta_event_wq);
+
+	return err;
+}
+
+#if defined(__KERNEL__) && !defined(DISABLE_ASYNC_BACKEND)
+static void flush_pending_delta_work(struct work_struct *work)
+{
+	struct sb *sb = container_of(work, struct sb, flush_work);
+	int err;
+
+	if (test_and_clear_bit(TUX3_COMMIT_PENDING_BIT, &sb->backend_state))
+		err = __flush_pending_delta(sb);
+	else
+		assert(0);
+
+	/* FIXME: error handling */
+}
+
+static void schedule_flush_delta(struct sb *sb)
+{
+	queue_work(system_long_wq, &sb->flush_work);
+}
+
+static void tux3_init_flusher(struct sb *sb)
+{
+	INIT_WORK(&sb->flush_work, flush_pending_delta_work);
+}
+
+void tux3_exit_flusher(struct sb *sb)
+{
+	flush_work(&sb->flush_work);
+}
+
 static int flush_pending_delta(struct sb *sb)
 {
+	return 0;
+}
+#else /* !__KERNEL__ || DISABLE_ASYNC_BACKEND */
+static void schedule_flush_delta(struct sb *sb)
+{
+}
+
+static void tux3_init_flusher(struct sb *sb)
+{
+}
+
+void tux3_exit_flusher(struct sb *sb)
+{
+}
+
+static int flush_pending_delta(struct sb *sb)
+{
+	int err = 0;
+
 	if (!test_bit(TUX3_COMMIT_PENDING_BIT, &sb->backend_state))
 		goto out;
 
-	if (test_and_clear_bit(TUX3_COMMIT_PENDING_BIT, &sb->backend_state)) {
-		unsigned delta = sb->marshal_delta;
-		int err;
-#ifndef ROLLUP_DEBUG
-		enum rollup_flags rollup_flag = ALLOW_ROLLUP;
-#else
-		struct delta_ref *delta_ref = sb->pending_delta;
-		enum rollup_flags rollup_flag = delta_ref->rollup_flag;
-		sb->pending_delta = NULL;
-#endif
-
-		err = do_commit(sb, rollup_flag);
-
-		sb->committed_delta = delta;
-		clear_bit(TUX3_COMMIT_RUNNING_BIT, &sb->backend_state);
-
-		/* Wake up waiters for delta commit */
-		wake_up_all(&sb->delta_event_wq);
-
-		return err;
-	}
-
+	if (test_and_clear_bit(TUX3_COMMIT_PENDING_BIT, &sb->backend_state))
+		err = __flush_pending_delta(sb);
 out:
-	return 0;
+	return err;
 }
+#endif /* !__KERNEL__ || DISABLE_ASYNC_BACKEND */
 
 /*
  * Provide transaction boundary for delta, and delta transition request.
@@ -496,12 +553,14 @@ static struct delta_ref *delta_get(struct sb *sb)
 static void delta_put(struct sb *sb, struct delta_ref *delta_ref)
 {
 	if (atomic_dec_and_test(&delta_ref->refcount)) {
-		/* FIXME: If we got daemon, this should wake up it */
 		trace("set TUX3_COMMIT_PENDING_BIT");
 		set_bit(TUX3_COMMIT_PENDING_BIT, &sb->backend_state);
-
+		/* Start the flusher for pending delta */
+		schedule_flush_delta(sb);
+#ifdef DISABLE_ASYNC_BACKEND
 		/* Wake up waiters for pending marshal delta */
 		wake_up_all(&sb->delta_event_wq);
+#endif
 	}
 
 	trace("delta %u, refcount %u",
@@ -621,7 +680,7 @@ static int try_flush_pending_until_delta(struct sb *sb, unsigned delta)
 	      delta, sb->committed_delta, sb->backend_state);
 
 	if (!delta_after_eq(sb->committed_delta, delta))
-		flush_pending_delta(sb);	/* FIXME: daemonize */
+		flush_pending_delta(sb);
 
 	return delta_after_eq(sb->committed_delta, delta);
 }

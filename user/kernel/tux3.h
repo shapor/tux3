@@ -288,7 +288,8 @@ struct sb {
 	/* Per-delta dirty data for sb */
 	struct sb_delta_dirty s_ddc[TUX3_MAX_DELTA];
 #ifdef __KERNEL__
-	struct super_block *vfs_sb; /* Generic kernel superblock */
+	struct work_struct flush_work;	/* work to flush delta */
+	struct super_block *vfs_sb;	/* Generic kernel superblock */
 #else
 	struct dev *dev;		/* userspace block device */
 	loff_t s_maxbytes;		/* maximum file size */
@@ -691,6 +692,7 @@ void setup_sb(struct sb *sb, struct disksuper *super);
 int load_sb(struct sb *sb);
 int save_sb(struct sb *sb);
 int apply_defered_bfree(struct sb *sb, u64 val);
+void tux3_exit_flusher(struct sb *sb);
 int force_rollup(struct sb *sb);
 int force_delta(struct sb *sb);
 unsigned tux3_get_current_delta(void);
